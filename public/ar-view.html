@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>ArtGO AR</title>
+
+  <!--
+    LOADING ORDER IS CRITICAL — do not reorder these three blocks.
+    Block 1: A-Frame loads Three.js into window.THREE
+  -->
+  <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+
+  <!--
+    Block 2: THREE.Math compatibility patch.
+    A-Frame 1.4.0 ships Three.js r148 where THREE.Math was REMOVED.
+    AR.js 3.4.x still calls THREE.Math.degToRad which throws and
+    silently breaks ALL entity placement — no pins show, scene breaks.
+    This restores the alias. Must run after A-Frame, before AR.js.
+  -->
+  <script>
+    if (window.THREE && window.THREE.MathUtils && !window.THREE.Math) {
+      window.THREE.Math = window.THREE.MathUtils;
+    }
+  </script>
+
+  <!-- Block 3: AR.js after patch -->
+  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.2/aframe/build/aframe-ar.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;600;700&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    /*
+      AR.js (videoTexture:false) injects a <video> into <body>.
+      It tries to resize/position it with JS — on many Android
+      Chrome builds this results in 0×0 or off-screen placement.
+      We override everything so the video ALWAYS fills the viewport
+      and sits BEHIND the transparent WebGL canvas.
+
+      z-index stacking (low → high):
+        video  = 0   (camera feed — the background)
+        canvas = 1   (WebGL with alpha — see-through to video)
+        UI     = 9999 (overlays)
+    */
+    #arjs-video,
+    body>video,
+    body>.arjs-video,
+    body>div>video {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      min-width: 100vw !important;
+      min-height: 100vh !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      transform: none !important;
+      object-fit: cover !important;
+      z-index: 0 !important;
+    }
+
+    .a-canvas {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      z-index: 1 !important;
+      background-color: transparent !important;
+    }
+
+    #back-btn {
+      position: fixed;
+      top: env(safe-area-inset-top, 16px);
+      left: 16px;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: white;
+      border-radius: 50px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-family: 'DM Sans', sans-serif;
+      cursor: pointer;
+    }
+
+    #gps-status {
+      position: fixed;
+      top: env(safe-area-inset-top, 16px);
+      right: 16px;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: white;
+      border-radius: 50px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-family: monospace;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .gps-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #FF4444;
+      animation: gpsFlash 1s infinite;
+    }
+
+    .gps-dot.ready {
+      background: #44FF88;
+      animation: none;
+    }
+
+    .gps-dot.warning {
+      background: #FFD700;
+      animation: none;
+    }
+
+    @keyframes gpsFlash {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: 0.2
+      }
+    }
+
+    #info-bar {
+      position: fixed;
+      bottom: env(safe-area-inset-bottom, 0);
+      left: 0;
+      right: 0;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    #artwork-title {
+      color: #F0F0FF;
+      font-family: 'Space Mono', monospace;
+      font-size: 15px;
+      font-weight: bold;
+    }
+
+    #artist-name {
+      color: #8888AA;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      margin-top: 2px;
+    }
+
+    #like-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: white;
+      border-radius: 50px;
+      padding: 8px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'DM Sans', sans-serif;
+      transition: transform 0.2s ease;
+    }
+
+    #like-btn.liked {
+      background: rgba(255, 60, 60, 0.3);
+      border-color: rgba(255, 60, 60, 0.5);
+    }
+
+    #start-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: #0A0A0F;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 32px;
+      text-align: center;
+    }
+
+    #start-overlay.hidden {
+      display: none;
+    }
+
+    .start-emoji {
+      font-size: 64px;
+    }
+
+    .start-title {
+      color: #F0F0FF;
+      font-family: 'Space Mono', monospace;
+      font-size: 22px;
+      font-weight: bold;
+    }
+
+    .start-artwork-name {
+      color: #4488FF;
+      font-family: 'Space Mono', monospace;
+      font-size: 15px;
+    }
+
+    .start-sub {
+      color: #8888AA;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px;
+      max-width: 280px;
+      line-height: 1.6;
+    }
+
+    .start-btn {
+      background: #4488FF;
+      color: white;
+      border: none;
+      border-radius: 50px;
+      padding: 16px 36px;
+      font-size: 16px;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 0 30px rgba(68, 136, 255, 0.5);
+      width: 100%;
+      max-width: 280px;
+    }
+
+    .back-link {
+      color: #8888AA;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px;
+      cursor: pointer;
+      text-decoration: underline;
+      background: none;
+      border: none;
+    }
+
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9998;
+      background: rgba(10, 10, 15, 0.8);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      transition: opacity 0.5s ease;
+    }
+
+    #loading-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(68, 136, 255, 0.2);
+      border-top-color: #4488FF;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .loading-text {
+      color: #F0F0FF;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .loading-sub {
+      color: #8888AA;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      text-align: center;
+      max-width: 240px;
+    }
+
+    #unlock-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9997;
+      background: rgba(10, 10, 15, 0.93);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 32px;
+      text-align: center;
+    }
+
+    #unlock-overlay.hidden,
+    #condition-overlay.hidden {
+      display: none;
+    }
+
+    .condition-icon {
+      font-size: 48px;
+      margin-bottom: 10px;
+    }
+
+    .condition-title {
+      color: #FFD700;
+      font-family: 'Space Mono', monospace;
+      font-size: 20px;
+      font-weight: bold;
+    }
+
+    .lock-icon {
+      font-size: 48px;
+      animation: lockPulse 2s ease-in-out infinite;
+    }
+
+    @keyframes lockPulse {
+
+      0%,
+      100% {
+        transform: scale(1)
+      }
+
+      50% {
+        transform: scale(1.1)
+      }
+    }
+
+    .unlock-title {
+      color: #F0F0FF;
+      font-family: 'Space Mono', monospace;
+      font-size: 20px;
+      font-weight: bold;
+    }
+
+    .unlock-price {
+      color: #4488FF;
+      font-family: monospace;
+      font-size: 24px;
+      background: rgba(68, 136, 255, 0.15);
+      border: 1px solid rgba(68, 136, 255, 0.3);
+      border-radius: 50px;
+      padding: 6px 20px;
+    }
+
+    .unlock-btn {
+      background: #4488FF;
+      color: white;
+      border: none;
+      border-radius: 50px;
+      padding: 16px 32px;
+      font-size: 16px;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 0 30px rgba(68, 136, 255, 0.4);
+      width: 100%;
+      max-width: 280px;
+    }
+
+    #gps-notice {
+      position: fixed;
+      bottom: 90px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      background: rgba(255, 180, 0, 0.15);
+      border: 1px solid rgba(255, 180, 0, 0.4);
+      color: #FFD700;
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      text-align: center;
+      max-width: 280px;
+      display: none;
+      white-space: nowrap;
+    }
+
+    /* ── Proximity Flash Overlay (iOS vibration fallback) ── */
+    #proximity-flash {
+      position: fixed;
+      inset: 0;
+      z-index: 9990;
+      pointer-events: none;
+      border-radius: 0;
+      opacity: 0;
+      transition: opacity 0.1s ease;
+    }
+
+    #proximity-flash.flash-50 {
+      box-shadow: inset 0 0 0 4px rgba(255, 215, 0, 0.5);
+      animation: proximityFlash50 0.6s ease forwards;
+    }
+
+    #proximity-flash.flash-20 {
+      box-shadow: inset 0 0 0 6px rgba(255, 165, 0, 0.7);
+      animation: proximityFlash20 0.8s ease forwards;
+    }
+
+    #proximity-flash.flash-5 {
+      box-shadow: inset 0 0 0 10px rgba(255, 215, 0, 0.9);
+      animation: proximityFlash5 1.0s ease forwards;
+    }
+
+    @keyframes proximityFlash50 {
+      0% {
+        opacity: 0;
+      }
+
+      20% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes proximityFlash20 {
+      0% {
+        opacity: 0;
+      }
+
+      15% {
+        opacity: 1;
+      }
+
+      45% {
+        opacity: 0;
+      }
+
+      60% {
+        opacity: 0.8;
+      }
+
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @keyframes proximityFlash5 {
+      0% {
+        opacity: 0;
+      }
+
+      12% {
+        opacity: 1;
+      }
+
+      28% {
+        opacity: 0;
+      }
+
+      44% {
+        opacity: 1;
+      }
+
+      60% {
+        opacity: 0;
+      }
+
+      76% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <button id="back-btn" onclick="goBack()">← Back</button>
+
+  <div id="gps-status" onclick="testVibration()" title="Tap to test vibration">
+    <div class="gps-dot" id="gps-dot"></div>
+    <span id="gps-text">Locating...</span>
+    <span id="dist-text" style="margin-left:4px;color:#FFD700;display:none"></span>
+  </div>
+
+  <div id="info-bar">
+    <div>
+      <div id="artwork-title">Loading...</div>
+      <div id="artist-name"></div>
+    </div>
+    <button id="like-btn" onclick="handleLike()">
+      <span id="like-icon">♡</span>
+      <span id="like-count">0</span>
+    </button>
+  </div>
+
+  <div id="gps-notice">📍 No GPS — showing approximate location</div>
+  <div id="proximity-flash"></div>
+
+  <div id="loading-overlay" class="hidden">
+    <div class="spinner"></div>
+    <div class="loading-text">Acquiring GPS</div>
+    <div class="loading-sub" id="loading-sub-text">Move outdoors for best results</div>
+  </div>
+
+  <div id="start-overlay">
+    <div class="start-emoji">🌍</div>
+    <div class="start-title">ArtGO AR</div>
+    <div class="start-artwork-name" id="start-artwork-name"></div>
+    <div class="start-sub">
+      Tap below to open your camera.<br>
+      Art will appear anchored in the real world.
+    </div>
+    <button class="start-btn" onclick="startAR()">Open AR Experience</button>
+    <button class="back-link" onclick="goBack()" style="margin-top:8px">Return to Map</button>
+  </div>
+
+  <div id="unlock-overlay" class="hidden">
+    <div class="lock-icon">🔒</div>
+    <div class="unlock-title" id="unlock-title">Locked Artwork</div>
+    <div class="unlock-price" id="unlock-price">£0.99</div>
+    <button class="unlock-btn" onclick="goToUnlock()">Unlock & View Forever</button>
+    <button class="back-link" style="margin-top:8px" onclick="goBack()">Maybe later</button>
+  </div>
+
+  <div id="condition-overlay" class="hidden">
+    <div class="condition-icon" id="condition-icon">⏳</div>
+    <div class="condition-title" id="condition-title">Condition Not Met</div>
+    <div class="start-sub" id="condition-msg" style="margin: 10px 0 20px 0;">
+      This artwork only appears under specific conditions.
+    </div>
+    <button class="start-btn" onclick="goBack()">Back to Map</button>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const artworkId = params.get('id');
+    const mediaUrl = decodeURIComponent(params.get('mediaUrl') || '');
+    const mediaType = params.get('mediaType');
+    const artLat = parseFloat(params.get('lat') || '0');
+    const artLng = parseFloat(params.get('lng') || '0');
+    const title = params.get('title') || 'Untitled';
+    const artistName = params.get('artistName') || '';
+    const isPaid = params.get('isPaid') === 'true';
+    const price = parseFloat(params.get('price') || '0');
+    const appOrigin = params.get('origin') || window.location.origin;
+    const FB_PROJECT = params.get('fbProject');
+    const portalLat = params.get('portalLat');
+    const portalLng = params.get('portalLng');
+    const appearDuring = (params.get('appearDuring') || 'Always').split(',');
+
+    // ── Environmental Conditions Detection ──
+    const now = new Date();
+    const month = now.getMonth();
+    const hour = now.getHours();
+
+    const env = {
+      time: hour >= 6 && hour < 20 ? 'Day' : 'Night',
+      isSummer: month >= 5 && month <= 7,
+      isRaining: false
+    };
+
+    const activeConditions = ['Always', env.time];
+    if (env.isSummer) activeConditions.push('Summer');
+    if (env.isRaining) activeConditions.push('Rain');
+
+    const isConditionMet = appearDuring.includes('Always') || appearDuring.some(c => activeConditions.includes(c));
+
+    if (!isConditionMet) {
+      setTimeout(() => {
+        const overlay = document.getElementById('condition-overlay');
+        overlay.classList.remove('hidden');
+        
+        const msg = document.getElementById('condition-msg');
+        const icon = document.getElementById('condition-icon');
+        
+        if (appearDuring.includes('Summer')) {
+          icon.textContent = '🌻';
+          msg.textContent = 'This artwork only appears in Summer.';
+        } else if (appearDuring.includes('Rain')) {
+          icon.textContent = '🌧️';
+          msg.textContent = 'This artwork only appears when it rains.';
+        } else if (appearDuring.includes('Night')) {
+          icon.textContent = '🌙';
+          msg.textContent = 'This artwork only appears at night.';
+        } else if (appearDuring.includes('Day')) {
+          icon.textContent = '☀️';
+          msg.textContent = 'This artwork only appears during the day.';
+        }
+      }, 100);
+    }
+
+    // ── Proximity vibration state ──────────────────────────────────────────
+    // Tracks which (artworkId + threshold) combos have already fired.
+    // Key format: `${artworkId}_${threshold}` e.g. "abc123_50"
+    const firedThresholds = new Set();
+    const THRESHOLDS = [
+      { dist: 5, key: '5', vibration: [200, 100, 200, 100, 400], flashClass: 'flash-5' },
+      { dist: 20, key: '20', vibration: [150, 100, 150], flashClass: 'flash-20' },
+      { dist: 50, key: '50', vibration: [100], flashClass: 'flash-50' },
+    ];
+    const supportsVibration = typeof navigator.vibrate === 'function';
+    console.log('[Proximity] navigator.vibrate supported:', supportsVibration);
+
+    function testVibration() {
+      if (supportsVibration) {
+        navigator.vibrate([200, 100, 200]);
+        console.log('[Proximity] Test vibration fired');
+      } else {
+        triggerProximityAlert('flash-20', []);
+        console.log('[Proximity] Test flash fired (no vibration API)');
+      }
+    }
+
+    function haversineDistance(lat1, lng1, lat2, lng2) {
+      const R = 6371000;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function triggerProximityAlert(flashClass, vibrationPattern) {
+      if (supportsVibration) {
+        navigator.vibrate(vibrationPattern);
+      } else {
+        // iOS visual fallback: gold screen-edge flash
+        const flash = document.getElementById('proximity-flash');
+        flash.className = '';
+        // Force reflow so re-adding class triggers animation
+        void flash.offsetWidth;
+        flash.classList.add(flashClass);
+        // Clean up class after animation completes
+        setTimeout(() => { flash.className = ''; }, 1100);
+      }
+    }
+
+    function checkProximity(userLat, userLng) {
+      if (!artLat || !artLng) return;
+
+      const dist = haversineDistance(userLat, userLng, artLat, artLng);
+
+      // Show live distance in GPS badge
+      const distEl = document.getElementById('dist-text');
+      if (distEl) {
+        distEl.style.display = 'inline';
+        distEl.textContent = Math.round(dist) + 'm away';
+      }
+
+      // Check thresholds from smallest to largest (inner takes priority)
+      for (const t of THRESHOLDS) {
+        const fireKey = artworkId + '_' + t.key;
+        const resetKey = artworkId + '_reset_' + t.key;
+        const buffer = t.dist + 10;
+
+        if (dist <= t.dist) {
+          if (!firedThresholds.has(fireKey)) {
+            firedThresholds.add(fireKey);
+            firedThresholds.delete(resetKey);
+            console.log('[Proximity] Threshold ' + t.key + 'm crossed! dist=' + Math.round(dist) + 'm');
+            triggerProximityAlert(t.flashClass, t.vibration);
+          }
+        } else if (dist > buffer) {
+          if (!firedThresholds.has(resetKey)) {
+            firedThresholds.add(resetKey);
+            firedThresholds.delete(fireKey);
+            console.log('[Proximity] Reset threshold ' + t.key + 'm (dist=' + Math.round(dist) + 'm)');
+          }
+        }
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+
+    const isUnlocked =
+      !isPaid ||
+      localStorage.getItem('unlocked_' + artworkId) === 'true' ||
+      sessionStorage.getItem('viewonce_' + artworkId) === 'true' ||
+      params.get('unlocked') === 'true';
+
+    document.getElementById('artwork-title').textContent = title;
+    document.getElementById('artist-name').textContent = artistName ? 'by ' + artistName : '';
+    document.getElementById('start-artwork-name').textContent = title;
+
+    if (!isUnlocked) {
+      document.getElementById('unlock-overlay').classList.remove('hidden');
+      document.getElementById('unlock-title').textContent = title;
+      document.getElementById('unlock-price').textContent = '£' + price.toFixed(2);
+    }
+
+    function goBack() {
+      if (document.referrer && document.referrer !== window.location.href) {
+        window.history.back();
+      } else {
+        window.location.href = appOrigin + '/map';
+      }
+    }
+
+    function goToUnlock() {
+      window.location.href = appOrigin + '/ar/' + artworkId;
+    }
+
+    let likeCount = parseInt(params.get('likes') || '0');
+    let hasLiked = false;
+    try {
+      hasLiked = JSON.parse(localStorage.getItem('liked_artworks') || '[]').includes(artworkId);
+    } catch (e) { }
+
+    document.getElementById('like-count').textContent = likeCount;
+    if (hasLiked) {
+      document.getElementById('like-btn').classList.add('liked');
+      document.getElementById('like-icon').textContent = '♥';
+    }
+
+    function handleLike() {
+      if (hasLiked) return;
+      hasLiked = true;
+      likeCount++;
+      document.getElementById('like-count').textContent = likeCount;
+      document.getElementById('like-btn').classList.add('liked');
+      document.getElementById('like-icon').textContent = '♥';
+      const btn = document.getElementById('like-btn');
+      btn.style.transform = 'scale(1.3)';
+      setTimeout(() => { btn.style.transform = 'scale(1)'; }, 200);
+      try {
+        const list = JSON.parse(localStorage.getItem('liked_artworks') || '[]');
+        list.push(artworkId);
+        localStorage.setItem('liked_artworks', JSON.stringify(list));
+      } catch (e) { }
+      if (FB_PROJECT) {
+        fetch(
+          'https://firestore.googleapis.com/v1/projects/' + FB_PROJECT +
+          '/databases/(default)/documents/artworks/' + artworkId +
+          '?updateMask.fieldPaths=likes',
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields: { likes: { integerValue: likeCount } } })
+          }
+        ).catch(e => console.error('Like failed:', e));
+      }
+    }
+
+    async function startAR() {
+      let gpsReady = false;
+
+      // iOS 13+ motion permission
+      if (
+        typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function'
+      ) {
+        try {
+          const state = await DeviceOrientationEvent.requestPermission();
+          if (state !== 'granted') {
+            alert('Motion permission required for AR.');
+            return;
+          }
+        } catch (e) {
+          console.error('Orientation permission:', e);
+        }
+      }
+
+      document.getElementById('start-overlay').classList.add('hidden');
+      document.getElementById('loading-overlay').classList.remove('hidden');
+
+      let entityMarkup = '';
+
+      if (isUnlocked && mediaUrl && artLat && artLng) {
+        const gpsAttr = 'latitude: ' + artLat + '; longitude: ' + artLng;
+
+        if (mediaType === 'image') {
+          entityMarkup = `
+            <a-assets timeout="60000">
+              <img id="arImg" src="${mediaUrl}" crossorigin="anonymous">
+            </a-assets>
+            <a-image
+              src="#arImg"
+              gps-projected-entity-place="${gpsAttr}"
+              look-at="[gps-projected-camera]"
+              scale="5 5 1"
+              material="shader: flat; transparent: true; alphaTest: 0.1; side: double">
+            </a-image>`;
+
+        } else if (mediaType === 'video') {
+          entityMarkup = `
+            <a-assets timeout="60000">
+              <video id="arVideo" src="${mediaUrl}" autoplay loop crossorigin="anonymous" playsinline webkit-playsinline muted></video>
+            </a-assets>
+            <a-video
+              src="#arVideo"
+              gps-projected-entity-place="${gpsAttr}"
+              look-at="[gps-projected-camera]"
+              width="16" height="9"
+              material="shader: flat; side: double">
+            </a-video>`;
+
+        } else if (mediaType === 'audio' || mediaType === 'voice') {
+          const audio = document.createElement('audio');
+          audio.src = mediaUrl;
+          audio.autoplay = true;
+          audio.loop = true;
+          document.body.appendChild(audio);
+
+          entityMarkup = `
+            <a-entity gps-projected-entity-place="${gpsAttr}" look-at="[gps-projected-camera]">
+              <a-box material="shader: flat; color: #FF6B9D" position="-0.6 0 0" width="0.2" height="1" depth="0.2" animation="property: scale; from: 1 0.5 1; to: 1 2 1; dir: alternate; dur: 400; loop: true; easing: easeInOutSine"></a-box>
+              <a-box material="shader: flat; color: #4488FF" position="-0.2 0 0" width="0.2" height="1" depth="0.2" animation="property: scale; from: 1 1.5 1; to: 1 0.3 1; dir: alternate; dur: 600; loop: true; easing: easeInOutSine"></a-box>
+              <a-box material="shader: flat; color: #FFD700" position="0.2 0 0" width="0.2" height="1" depth="0.2" animation="property: scale; from: 1 0.8 1; to: 1 1.8 1; dir: alternate; dur: 500; loop: true; easing: easeInOutSine"></a-box>
+              <a-box material="shader: flat; color: #44FF88" position="0.6 0 0" width="0.2" height="1" depth="0.2" animation="property: scale; from: 1 1.2 1; to: 1 0.4 1; dir: alternate; dur: 450; loop: true; easing: easeInOutSine"></a-box>
+            </a-entity>`;
+
+        } else if (mediaType === 'model3d') {
+          entityMarkup = `
+            <a-entity
+              gltf-model="${mediaUrl}"
+              gps-projected-entity-place="${gpsAttr}"
+              scale="2 2 2"
+              animation="property: rotation; from: 0 0 0; to: 0 360 0; loop: true; dur: 8000; easing: linear">
+            </a-entity>`;
+        }
+
+        if (mediaType !== 'image') {
+          entityMarkup += `
+            <a-sphere
+              radius="1"
+              gps-projected-entity-place="${gpsAttr}"
+              material="shader: flat; color: #4488FF; transparent: true; opacity: 0.9"
+              animation="property: scale; from: 0.9 0.9 0.9; to: 1.1 1.1 1.1; dir: alternate; dur: 1500; loop: true; easing: easeInOutSine">
+            </a-sphere>
+          `;
+        }
+      }
+
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = `
+        <a-scene
+          id="ar-scene"
+          vr-mode-ui="enabled: false"
+          arjs="sourceType: webcam; videoTexture: false; debugUIEnabled: false;"
+          renderer="antialias: true; alpha: true; precision: medium; colorManagement: true;"
+          loading-screen="enabled: false">
+          
+          <a-light type="ambient" color="#ffffff" intensity="1.2"></a-light>
+          <a-light type="directional" color="#ffffff" intensity="0.6" position="-1 1 1"></a-light>
+
+          <a-camera 
+            gps-projected-camera="gpsMinDistance: 2; originDestinationOffset: 0${portalLat && portalLng ? `; simulateLatitude: ${portalLat}; simulateLongitude: ${portalLng}` : ''}" 
+            rotation-reader>
+          </a-camera>
+          ${entityMarkup}
+        </a-scene>
+      `;
+
+      const sceneNode = tempDiv.firstElementChild;
+
+      setTimeout(() => {
+        document.body.insertBefore(sceneNode, document.body.firstChild);
+
+        const applyVideoStyles = () => {
+          const vids = document.querySelectorAll('body>video, #arjs-video, body>.arjs-video, body>div>video');
+          vids.forEach(v => {
+            v.style.setProperty('position', 'fixed', 'important');
+            v.style.setProperty('top', '0', 'important');
+            v.style.setProperty('left', '0', 'important');
+            v.style.setProperty('width', '100vw', 'important');
+            v.style.setProperty('height', '100vh', 'important');
+            v.style.setProperty('minWidth', '100vw', 'important');
+            v.style.setProperty('minHeight', '100vh', 'important');
+            v.style.setProperty('margin', '0', 'important');
+            v.style.setProperty('padding', '0', 'important');
+            v.style.setProperty('transform', 'none', 'important');
+            v.style.setProperty('objectFit', 'cover', 'important');
+            v.style.setProperty('zIndex', '0', 'important');
+          });
+        };
+
+        applyVideoStyles();
+        window.__arVideoFixInterval = window.__arVideoFixInterval || setInterval(applyVideoStyles, 500);
+
+        if (!window.__arVideoObserver) {
+          window.__arVideoObserver = new MutationObserver(() => applyVideoStyles());
+          window.__arVideoObserver.observe(document.body, { childList: true, subtree: true });
+        }
+      }, 0);
+
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(
+          (pos) => {
+            const acc = Math.round(pos.coords.accuracy);
+            document.getElementById('gps-text').textContent = '±' + acc + 'm';
+            if (!gpsReady) {
+              gpsReady = true;
+              document.getElementById('gps-dot').classList.add('ready');
+              hideLoadingOverlay();
+            }
+            checkProximity(pos.coords.latitude, pos.coords.longitude);
+          },
+          (err) => {
+            console.error('GPS error:', err.code, err.message);
+            if (err.code === 2) {
+              document.getElementById('gps-text').textContent = 'No GPS';
+              document.getElementById('gps-dot').classList.add('warning');
+              document.getElementById('gps-notice').style.display = 'block';
+            } else if (err.code === 3) {
+              document.getElementById('gps-text').textContent = 'Timeout';
+            } else {
+              document.getElementById('gps-text').textContent = 'GPS off';
+            }
+            if (!gpsReady) {
+              gpsReady = true;
+              hideLoadingOverlay();
+            }
+          },
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+        );
+      } else {
+        document.getElementById('gps-text').textContent = 'No GPS API';
+        setTimeout(hideLoadingOverlay, 500);
+      }
+
+      setTimeout(() => {
+        if (!gpsReady) {
+          gpsReady = true;
+          hideLoadingOverlay();
+        }
+      }, 8000);
+    }
+    function hideLoadingOverlay() {
+      const el = document.getElementById('loading-overlay');
+      if (el) el.classList.add('hidden');
+    }
+  </script>
+</body>
+
+</html>

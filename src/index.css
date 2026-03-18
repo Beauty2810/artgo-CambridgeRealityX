@@ -1,0 +1,86 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0A0A0F;
+  --color-surface: #12121A;
+  --color-text-primary: #F0F0FF;
+  --color-text-secondary: #8888AA;
+  --color-accent: #4488FF;
+
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-mono: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes pulse-slow {
+  0%, 100% { transform: scale(1); opacity: 0.4; }
+  50% { transform: scale(1.2); opacity: 0.2; }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes drop-bounce {
+  0% { transform: translateY(-50px) scale(0.8); opacity: 0; }
+  60% { transform: translateY(10px) scale(1.1); opacity: 1; }
+  80% { transform: translateY(-5px) scale(0.95); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 8s linear infinite;
+}
+
+.drop-bounce {
+  animation: drop-bounce 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Hide Mapbox UI elements for cleaner look */
+.mapboxgl-ctrl-bottom-left,
+.mapboxgl-ctrl-bottom-right {
+  display: none !important;
+}
+
+@keyframes sonarPulse {
+  0%   { transform: scale(0); opacity: 0.8; }
+  70%  { opacity: 0.3; }
+  100% { transform: scale(8); opacity: 0; }
+}
+
+.sonar-ring {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 2px solid #4488FF;
+  transform: scale(0);
+  pointer-events: none;
+}
+
+.sonar-ring-container .sonar-ring:nth-child(1) { animation: sonarPulse 4s ease-out infinite; }
+.sonar-ring-container .sonar-ring:nth-child(2) { animation: sonarPulse 4s ease-out infinite 1.3s; }
+.sonar-ring-container .sonar-ring:nth-child(3) { animation: sonarPulse 4s ease-out infinite 2.6s; }
+
+.orb-flare {
+  animation: orbFlare 0.6s ease-out forwards !important;
+}
+
+@keyframes orbFlare {
+  0%   { transform: scale(1);   filter: brightness(1); }
+  30%  { transform: scale(1.8); filter: brightness(2.5); }
+  100% { transform: scale(1);   filter: brightness(1); }
+}
