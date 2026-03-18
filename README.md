@@ -1,6 +1,6 @@
-# GalleryOS 🌍🎨
+# ArtGO🌍🎨
 
-GalleryOS is a spatial, location-based augmented reality (AR) art platform. It transforms the physical world into an interactive digital canvas, allowing artists to pin multimedia artworks to real-world GPS coordinates and users to discover them through an immersive AR experience.
+ArtGO is a spatial, location-based augmented reality (AR) art platform. It transforms the physical world into an interactive digital canvas, allowing artists to pin multimedia artworks to real-world GPS coordinates and users to discover them through an immersive AR experience.
 
 ## ✨ Core Features
 
